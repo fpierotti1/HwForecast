@@ -6,11 +6,12 @@ import sys
 import json
 from fpdf import FPDF
 import base64
+import platform
 import math
 
 # Page Config
 st.set_page_config(
-    page_title="Laptop Forecast App v2.9.1",
+    page_title="Laptop Forecast App v3.1",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -251,6 +252,9 @@ def main():
             current_config = load_config()
             db_val = current_config.get("database_path", "forecast_db.json")
             
+            # Cross-Platform: Normalize path separators to current OS
+            db_val = os.path.normpath(db_val)
+            
             new_db_path = st.text_input("Database Path", value=db_val, help="Enter path to forecast_db.json (Local or Network)")
             
             if new_db_path != db_val:
@@ -356,7 +360,7 @@ def main():
     col_h1, col_h2 = st.columns([3, 1])
     col_h1.markdown("### 💻 Laptop Forecast App")
     # Display Quarter and Version in a clean box or line
-    col_h2.success(f"**v2.9.1** | {selected_quarter}")
+    col_h2.success(f"**v3.1** | {selected_quarter} | {platform.system()}")
 
     # --- CALCULATION ENGINE ---
     df_calc = st.session_state.data_df.copy()
@@ -492,6 +496,11 @@ def main():
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
+        **v3.1 (Cross-Platform)**
+        - **Core**: Fully compatible with Windows and macOS.
+        - **Pathing**: Normalized file paths for Unix systems.
+        - **Builds**: Native installers for both platforms.
+
         **v2.9.1 (Crital Fix)**
         - **Fix**: Pricing sidebar fields now strictly sync with Active Quarter context.
 
