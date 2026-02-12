@@ -13,7 +13,7 @@ import datetime
 
 # Page Config
 st.set_page_config(
-    page_title="Laptop Forecast App v4.0",
+    page_title="Laptop Forecast App v3.5.9",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -377,16 +377,26 @@ def create_pdf(df, quarter):
     pdf.set_font("Arial", size=9)
     total_val = 0
     
-    # Generic iteration handles filters automatically if df is passed appropriately
+    # V3.5.6: Filter for Positive Purchase Needs
+    filtered_rows = []
     for _, row in df.iterrows():
+        qty_val = int(row.get("Purchase Needs", 0))
+        if qty_val > 0:
+            filtered_rows.append(row)
+            
+    for row in filtered_rows:
+        qty_val = int(row.get("Purchase Needs", 0))
+        
         pdf.cell(col_width, line_height, str(row["Model"]), border=1)
         pdf.cell(col_width, line_height, str(row["Region"]), border=1)
         pdf.cell(col_width, line_height, str(row["Language"]), border=1)
-        pdf.cell(col_width, line_height, str(int(row["Quantity"])), border=1)
+        pdf.cell(col_width, line_height, str(qty_val), border=1)
+        
         pdf.cell(col_width, line_height, f"${row['Unit Price']:,.0f}", border=1)
-        pdf.cell(col_width, line_height, f"${row['Total Line Cost']:,.0f}", border=1)
+        pdf.cell(col_width, line_height, f"${row['Total Cost']:,.0f}", border=1)
         pdf.ln(line_height)
-        total_val += row['Total Line Cost']
+        
+        total_val += row['Total Cost']
         
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 12)
@@ -540,7 +550,7 @@ def main():
     col_h1, col_h2 = st.columns([3, 1])
     col_h1.markdown("### 💻 Laptop Forecast App")
     # Display Quarter and Version in a clean box or line
-    col_h2.success(f"**v3.5** | {selected_quarter} | {platform.system()}")
+    col_h2.success(f"**v3.5.9** | {selected_quarter} | {platform.system()}")
     
     # --- CALCULATION ENGINE ---
     df_calc = st.session_state.data_df.copy()
@@ -602,9 +612,6 @@ def main():
     st.divider()
 
     # --- INPUT SECTION ---
-    # input_cols = ["Region", "Model", "Language", "Current Stock", "Backlog Tech Refresh", "Break Fix", "Tech Refresh Eligibility", "New Hires", "Buffer"]
-    
-    # st.subheader("Data Input") # Removed for compactness or made smaller
     
     with st.form("input_form"):
         st.markdown(f"**Data Input ({selected_quarter})**")
@@ -629,22 +636,6 @@ def main():
             key="data_editor"
         )
         
-        # V3.5: Totals Row
-        st.markdown("**Totals (Reference)**")
-        # Columns: Current Stock (Physical), Prev Q Demand, Effective Opening, New Hires, Total Demand, Required (Needs), Cost
-        # Note: filtered_db has the calculated values (Total Demand, Needs, Cost).
-        # We sum from filtered_db to properly reflect the calculations.
-        totals_data = {
-            "Physical Stock": [int(filtered_db["Physical Stock (Input)"].sum())],
-            "Prev Q Demand": [int(filtered_db["Prev Q Demand"].sum())],
-            "Effect. Opening": [int(filtered_db["Effective Opening Stock"].sum())],
-            "New Hires": [int(filtered_db["New Hires"].sum())],
-            "Total Demand": [int(filtered_db["Total Demand"].sum())], # Demand might be float, convert for display? User asked for Integer Precision in Lookback. Demand in current Q might still be float? Filtered_db has it as float. Let's show 1 decimal or int? Prompt says "Integer Precision & Totals". Let's assume standard formatting.
-            "Purch Needs": [int(filtered_db["Purchase Needs"].sum())],
-            "Total Cost": [f"${filtered_db['Total Cost'].sum():,.0f}"]
-        }
-        st.dataframe(pd.DataFrame(totals_data), hide_index=True)
-
         if st.form_submit_button("💾 Save Changes"):
             st.session_state.data_df.update(edited_input_df)
             
@@ -665,29 +656,105 @@ def main():
     st.divider()
 
     # --- REPORTING SECTION ---
-    st.header("📋 Reporting")
+    # V3.5.5: Always Show Section Header
+    st.markdown("### 3. Detailed Results & Purchase Order")
+    
+    # V3.5.3 Fix: Inject Unit Price into filtered_db for PDF generation
+    # The 'prices' dict is currently available in main() scope
+    # Use .copy() explicitly to avoid SettingWithCopyWarning on slice
+    report_df = filtered_db.copy()
+    
+    def get_price_for_row(row):
+        return prices.get((row["Region"], row["Model"]), 0)
+        
+    report_df["Unit Price"] = report_df.apply(get_price_for_row, axis=1)
+
+    # V3.5.7: Dashboard Alignment
+    # Filter for positive purchases
+    dashboard_df = report_df[report_df["Purchase Needs"] > 0].copy()
+
+    # Calculate Total Required Purchase (Sum of "Purchase Needs") for PDF Button Logic
+    total_required = report_df["Purchase Needs"].sum()
+
+    if not dashboard_df.empty:
+        # Select and Rename Columns
+        # Model, Region, Language, Qty, Unit Price, Line Total
+        dashboard_display = dashboard_df[[
+            "Model", "Region", "Language", "Purchase Needs", "Unit Price", "Total Cost"
+        ]].rename(columns={
+            "Purchase Needs": "Qty",
+            "Total Cost": "Line Total"
+        })
+        
+        # Display Dataframe with Formatting
+        st.dataframe(
+            dashboard_display,
+            column_config={
+                "Unit Price": st.column_config.NumberColumn(format="$%.2f"),
+                "Line Total": st.column_config.NumberColumn(format="$%.2f"),
+            },
+            hide_index=True,
+            width="stretch"
+        )
+    else:
+         st.success("✅ No purchases required for the selected criteria.")
+
     col1, col2 = st.columns(2)
     
     with col1:
         st.download_button(
             label="Download CSV Report",
-            data=filtered_db.to_csv(index=False).encode('utf-8'),
+            data=report_df.to_csv(index=False).encode('utf-8'),
             file_name=f'forecast_{selected_quarter}.csv',
             mime='text/csv'
         )
         
     with col2:
-        pdf_bytes = create_pdf(filtered_db, selected_quarter)
-        st.download_button(
-            label="Download PDF Report",
-            data=pdf_bytes,
-            file_name=f'procurement_{selected_quarter}.pdf',
-            mime='application/pdf'
-        )
+        # V3.5.5: Conditional PDF Button
+        if total_required > 0:
+            # Pass enriched DF
+            pdf_bytes = create_pdf(report_df, selected_quarter) 
+            st.download_button(
+                label="Download Purchase Order (PDF)",
+                data=pdf_bytes,
+                file_name=f'procurement_{selected_quarter}.pdf',
+                mime='application/pdf'
+            )
 
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
+        **v3.5.9 (Deprecation Fixes)**
+        - **Core**: Updated Streamlit parameters to silence deprecation warnings.
+        - **Refactor**: Replaced `use_container_width` with `width="stretch"`.
+
+        **v3.5.8 (UI Cleanup)**
+        - **UI**: Removed intermediate 'Totals' summary table to declutter the dashboard.
+        - **Focus**: Users now focus directly on the 'Detailed Results & Purchase Order' section.
+
+        **v3.5.7 (Dashboard Alignment)**
+        - **UI**: Aligned Dashboard 'Detailed Results' to match clean PO layout.
+        - **Filter**: Only displays rows with `Qty > 0`.
+        - **Format**: Applied Currency formatting to Unit Price and Line Total.
+
+        **v3.5.6 (PO Refinement)**
+        - **PDF**: Filtered to only show rows with `Required Purchase > 0`.
+        - **PDF**: Stripped unnecessary columns (matches procurement spec).
+
+        **v3.5.5 (UI Visibility)**
+        - **UI**: 'Detailed Results' section is now always visible.
+        - **Logic**: PDF Download button only appears if purchases are required.
+        - **Feedback**: Shows 'No purchases required' message if demand is met.
+
+        **v3.5.4 (Cost Fix)**
+        - **Fix**: Resolved `KeyError: 'Total Line Cost'` in PDF generation by referencing the correct column `Total Cost`.
+
+        **v3.5.3 (Pricing Fix)**
+        - **Fix**: Resolved `KeyError: 'Unit Price'` in PDF generation by injecting the column into the report dataframe.
+
+        **v3.5.2 (Critical Fix)**
+        - **Fix**: Resolved `KeyError: 'Quantity'` during PDF generation by referencing the correct data column (`Purchase Needs`).
+        
         **v3.5 (Rollback)**
         - **Rollback**: Reverted to Version 3.5 state. 
         - **Removed**: Hardware Integration, New Hires Allocator, v4.0 Sidebar structure.
@@ -703,6 +770,31 @@ def main():
         - **Fix**: Ensured `Effective Opening Stock` uses `Physical Stock (Input)` correctly.
 
         **v3.2 (Rolling Forecast)**
+        - **Lookback Logic**: Auto-calculates Effective Opening Stock based on Prev Quarter.
+        - **Calculations**: `Effective Opening = Physical Stock - Prev Q Demand`.
+        - **Input**: Renamed `Current Stock` to `Physical Stock (Input)`.
+
+        **v3.1 (Bulk Upload & Cross-Platform)**
+        - **Feature**: Bulk Stock Upload via CSV (Sidebar).
+        - **Core**: Fully compatible with Windows and macOS.
+        - **Pathing**: Normalized file paths for Unix systems.
+        - **Builds**: Native installers for both platforms.
+
+        **v2.9.1 (Crital Fix)**
+        - **Fix**: Pricing sidebar fields now strictly sync with Active Quarter context.
+
+        **v2.9 (Pricing Config)**
+        - **Persistence**: Regional Pricing is now saved Per-Quarter.
+        - **Context Switch**: Changing quarters updates the pricing table to that quarter's settings.
+
+        **v2.8 (Refactoring)**
+        - **Model Rename**: Renamed `Microsoft Surface 7 Laptop` to `Microsoft SL7`.
+        - **Migration**: Auto-migrates legacy data to new model name.
+
+        **v2.7 (Variable Logic)**
+        - **Persistence**: `Tech Refresh Adoption Rate` is now saved per-quarter.
+        - **UI**: Updated Slider Label.
+
         **v2.6**
         - **Data**: Added `FY26 Q4` for historical tracking.
 
@@ -713,23 +805,10 @@ def main():
 
         **v2.4**
         - **FY27 Fiscal Calendar Update**: Planning horizon aligned to FY27 cycle.
-
-        - **Polish**: Updated Labels and Layout.
-        - **Credits**: Added Author Information.
         
         **v2.2**
         - **UI**: Compact Header to maximize screen space.
-        - **Config**: Dynamic Database Path editor in Sidebar.
-        - **UX**: Split Results and POs into Tabs.
-        
-        **v2.1 (Portable)**
-        - One-Click Launcher (`setup_and_run.bat`).
-        
-        **v2.0**
-        - External `settings.json` for Shared Database access.
-        
-        **v1.0 - v1.7 legacy**
-        - Core forecasting logic, Region constraints, PO Export.
+        - **Config**: dynamic DB Path.
         """)
         
     # --- CREDITS ---

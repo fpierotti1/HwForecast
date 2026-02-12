@@ -1,7 +1,7 @@
 @echo off
 setlocal
 echo ========================================================
-echo   Laptop Forecast App v4.0 - Portable Launcher
+echo   Laptop Forecast App v3.5.9 - Portable Launcher
 echo ========================================================
 
 :: 1. Check if Python is installed
