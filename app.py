@@ -66,6 +66,73 @@ ALL_LANGS = ["English", "French", "German", "Hebrew", "Italian", "Spanish", "Swe
 
 # --- HELPER FUNCTIONS ---
 
+def process_stock_upload(uploaded_file):
+    try:
+        try:
+            df_upload = pd.read_csv(uploaded_file)
+        except UnicodeDecodeError:
+            # Fallback for Excel-generated CSVs (often cp1252/latin1)
+            uploaded_file.seek(0)
+            df_upload = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+        
+        # 1. Normalize Columns (Handle variations)
+        # Ensure we have the right columns or rename them
+        if 'model.short_description' not in df_upload.columns:
+            return 0, "Error: Column 'model.short_description' not found."
+            
+        # 2. Map Models
+        def map_model(desc):
+            s = str(desc).lower()
+            if "14\"" in s and ("macbook" in s or "pro" in s or "air" in s): return "Apple MacBook 14\""
+            if "16\"" in s and ("macbook" in s or "pro" in s): return "Apple MacBook 16\""
+            if "surface" in s or "laptop" in s or "studio" in s: return "Microsoft SL7"
+            return None # Skip others
+
+        # 3. Map Regions
+        def map_region(row):
+            loc = str(row.get('location', '')).upper()
+            geo = str(row.get('location.u_geographic_region', '')).upper()
+            
+            if "LMX1" in loc or "LSNX" in loc: return "NAMER"
+            if "MTV" in loc: return "Tel Aviv"
+            if "LSP3" in loc: return "LATAM"
+            
+            # Fallback
+            if "AMER" in geo: return "NAMER"
+            if "APAC" in geo: return "APAC"
+            if "EMEA" in geo: return "EMEA"
+            return "EMEA" # Default
+
+        # 4. Map Languages
+        def map_language(lang):
+            l = str(lang).title()
+            if "English" in l: return "English"
+            return l
+
+        df_upload['App_Model'] = df_upload['model.short_description'].apply(map_model)
+        df_upload['App_Region'] = df_upload.apply(map_region, axis=1)
+        df_upload['App_Language'] = df_upload['model.ref_cmdb_hardware_product_model.u_keyboard_language'].apply(map_language)
+
+        # 5. Aggregate Counts
+        stock_counts = df_upload.groupby(['App_Region', 'App_Model', 'App_Language']).size().reset_index(name='New_Stock')
+        
+        # 6. Merge into Session State
+        # Iterate and update specific rows in st.session_state.data_df
+        count_updated = 0
+        for _, row in stock_counts.iterrows():
+            mask = (
+                (st.session_state.data_df['Region'] == row['App_Region']) & 
+                (st.session_state.data_df['Model'] == row['App_Model']) & 
+                (st.session_state.data_df['Language'] == row['App_Language'])
+            )
+            if mask.any():
+                st.session_state.data_df.loc[mask, 'Current Stock'] = row['New_Stock']
+                count_updated += 1
+                
+        return count_updated, None
+    except Exception as e:
+        return 0, str(e)
+
 def get_languages_for_region(region):
     """Enforce Regional Constraints."""
     if region == "UK":
@@ -264,6 +331,18 @@ def main():
                 st.rerun()
                 
             st.caption(f"Reading from: `{os.path.abspath(get_db_path())}`")
+
+        # V3.1: Bulk Stock Upload
+        with st.expander("📂 Upload Stock Report (CSV)"):
+            uploaded_file = st.file_uploader("Upload CSV", type=["csv"], help="Upload a stock report CSV to update Current Stock for the active quarter.")
+            if uploaded_file is not None:
+                if st.button("Process File"):
+                    count, error = process_stock_upload(uploaded_file)
+                    if error:
+                        st.error(f"Failed: {error}")
+                    else:
+                        st.success(f"Success! Updated {count} rows.")
+                        st.rerun()
 
         # Dark Mode Toggle
         dark_mode = st.toggle("Dark Mode", value=False)
@@ -496,7 +575,8 @@ def main():
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
-        **v3.1 (Cross-Platform)**
+        **v3.1 (Bulk Upload & Cross-Platform)**
+        - **Feature**: Bulk Stock Upload via CSV (Sidebar).
         - **Core**: Fully compatible with Windows and macOS.
         - **Pathing**: Normalized file paths for Unix systems.
         - **Builds**: Native installers for both platforms.
