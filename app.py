@@ -11,7 +11,7 @@ import math
 
 # Page Config
 st.set_page_config(
-    page_title="Laptop Forecast App v3.1",
+    page_title="Laptop Forecast App v3.5",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -66,6 +66,30 @@ ALL_LANGS = ["English", "French", "German", "Hebrew", "Italian", "Spanish", "Swe
 
 # --- HELPER FUNCTIONS ---
 
+def get_previous_quarter_name(quarter_str):
+    """
+    Parses 'FYXX QY' and returns the previous quarter.
+    E.g. FY27 Q1 -> FY26 Q4
+    """
+    try:
+        parts = quarter_str.split()
+        fy_part = parts[0] # FY27
+        q_part = parts[1]  # Q1
+        
+        fy_year = int(fy_part.replace("FY", ""))
+        q_num = int(q_part.replace("Q", ""))
+        
+        prev_q_num = q_num - 1
+        prev_fy_year = fy_year
+        
+        if prev_q_num < 1:
+            prev_q_num = 4
+            prev_fy_year -= 1
+            
+        return f"FY{prev_fy_year} Q{prev_q_num}"
+    except:
+        return None
+
 def process_stock_upload(uploaded_file):
     try:
         try:
@@ -88,20 +112,23 @@ def process_stock_upload(uploaded_file):
             if "surface" in s or "laptop" in s or "studio" in s: return "Microsoft SL7"
             return None # Skip others
 
-        # 3. Map Regions
+        # 3. Map Regions (Updated v3.3)
         def map_region(row):
             loc = str(row.get('location', '')).upper()
             geo = str(row.get('location.u_geographic_region', '')).upper()
             
+            # Precise Location Overrides
+            if "MLN8" in loc: return "UK"       # New Rule
+            if "LSP3" in loc: return "LATAM"    # New Rule
             if "LMX1" in loc or "LSNX" in loc: return "NAMER"
             if "MTV" in loc: return "Tel Aviv"
-            if "LSP3" in loc: return "LATAM"
             
-            # Fallback
+            # Geographic Region Fallbacks
             if "AMER" in geo: return "NAMER"
             if "APAC" in geo: return "APAC"
             if "EMEA" in geo: return "EMEA"
-            return "EMEA" # Default
+            
+            return "EMEA" # Default fallback
 
         # 4. Map Languages
         def map_language(lang):
@@ -126,7 +153,7 @@ def process_stock_upload(uploaded_file):
                 (st.session_state.data_df['Language'] == row['App_Language'])
             )
             if mask.any():
-                st.session_state.data_df.loc[mask, 'Current Stock'] = row['New_Stock']
+                st.session_state.data_df.loc[mask, 'Physical Stock (Input)'] = row['New_Stock']
                 count_updated += 1
                 
         return count_updated, None
@@ -162,7 +189,10 @@ def generate_empty_dataset():
                     "Model": model,
                     "Region": region,
                     "Language": lang,
-                    "Current Stock": 0,
+                    "Language": lang,
+                    "Physical Stock (Input)": 0,
+                    "Prev Q Demand": 0, # Read-Only (Lookback)
+                    "Effective Opening Stock": 0, # Calculated
                     "Backlog Tech Refresh": 0,
                     "Break Fix": 0,
                     "Tech Refresh Eligibility": 0,
@@ -212,6 +242,10 @@ def load_quarter_data(quarter):
             # V2.8: Data Migration (Surface 7 -> SL7)
             if "Model" in saved_df.columns:
                 saved_df["Model"] = saved_df["Model"].replace("Microsoft Surface 7 Laptop", "Microsoft SL7")
+            
+            # V3.2: Data Migration (Current Stock -> Physical Stock)
+            if "Current Stock" in saved_df.columns:
+                saved_df.rename(columns={"Current Stock": "Physical Stock (Input)"}, inplace=True)
 
             keys = ["Model", "Region", "Language"]
             full_skeleton.set_index(keys, inplace=True)
@@ -219,15 +253,80 @@ def load_quarter_data(quarter):
             full_skeleton.update(saved_df)
             df = full_skeleton.reset_index()
             
-            numeric_cols = ["Current Stock", "Backlog Tech Refresh", "Break Fix", 
+            numeric_cols = ["Physical Stock (Input)", "Backlog Tech Refresh", "Break Fix", 
                             "Tech Refresh Eligibility", "New Hires", "Buffer"]
             for col in numeric_cols:
+                # Ensure col exists (robustness for old data)
+                if col not in df.columns:
+                    df[col] = 0.0
                 df[col] = df[col].astype(float)
         else:
             df = full_skeleton
     else:
         df = full_skeleton
     
+
+    
+    # --- V3.2: LOOKBACK LOGIC ---
+    # 1. Identify Previous Quarter
+    prev_q_name = get_previous_quarter_name(quarter)
+    
+    # 2. Load Prev Q Data (if exists)
+    prev_demand_map = {} # (Region, Model, Language) -> Total Demand
+    
+    if prev_q_name and prev_q_name in db:
+        content = db[prev_q_name]
+        # Handle dict vs list format
+        if isinstance(content, dict) and "data" in content:
+            raw_prev = content["data"]
+            prev_tr_rate = content.get("tr_rate", 0.55)
+        else:
+            raw_prev = content
+            prev_tr_rate = 0.55
+            
+        df_prev = pd.DataFrame(raw_prev)
+        if not df_prev.empty and "Model" in df_prev.columns:
+             # Handle Data Migration (Surface 7 -> SL7) for prev data too, to ensure match
+            df_prev["Model"] = df_prev["Model"].replace("Microsoft Surface 7 Laptop", "Microsoft SL7")
+            
+            # Ensure columns exist (handle older data versions)
+            for col in ["Backlog Tech Refresh", "Break Fix", "Tech Refresh Eligibility", "New Hires"]:
+                if col not in df_prev.columns: df_prev[col] = 0.0
+                
+            # Calculate Total Demand for Prev Q
+            # Demand = Backlog + BreakFix + (Eligible * Rate) + NewHires
+            # Calculate Total Demand for Prev Q
+            # Demand = Backlog + BreakFix + (Eligible * Rate) + NewHires
+            # V3.5: Round UP to nearest Integer
+            raw_demand = (
+                df_prev["Backlog Tech Refresh"].astype(float) +
+                df_prev["Break Fix"].astype(float) +
+                (df_prev["Tech Refresh Eligibility"].astype(float) * prev_tr_rate) +
+                df_prev["New Hires"].astype(float)
+            )
+            df_prev["Calculated_Demand"] = raw_demand.apply(lambda x: int(math.ceil(x)))
+            
+            # Create Map
+            for _, row in df_prev.iterrows():
+                key = (row.get("Region"), row.get("Model"), row.get("Language"))
+                prev_demand_map[key] = row["Calculated_Demand"]
+
+    # 3. Apply to Current DF
+    # If "Current Stock" exists from old data, rename it to "Physical Stock (Input)"
+    if "Current Stock" in df.columns:
+        df.rename(columns={"Current Stock": "Physical Stock (Input)"}, inplace=True)
+        
+    # Ensure new columns exist
+    if "Physical Stock (Input)" not in df.columns:
+        df["Physical Stock (Input)"] = 0.0
+        
+    # Map Prev Demand & Calculate Effective Opening
+    def get_prev_demand(row):
+        return prev_demand_map.get((row["Region"], row["Model"], row["Language"]), 0.0)
+
+    df["Prev Q Demand"] = df.apply(get_prev_demand, axis=1)
+    df["Effective Opening Stock"] = df["Physical Stock (Input)"] - df["Prev Q Demand"]
+
     # Global Sorting: Region (A-Z) -> Model
     df.sort_values(by=["Region", "Model"], inplace=True)
     df.reset_index(drop=True, inplace=True)
@@ -342,6 +441,7 @@ def main():
                         st.error(f"Failed: {error}")
                     else:
                         st.success(f"Success! Updated {count} rows.")
+                        # V3.2: Re-run will trigger load_quarter_data which refreshes the calc
                         st.rerun()
 
         # Dark Mode Toggle
@@ -371,7 +471,7 @@ def main():
         st.header("🗓️ Period")
         selected_quarter = st.selectbox(
             "Quarter", 
-            ["FY26 Q4", "FY27 Q1", "FY27 Q2", "FY27 Q3", "FY27 Q4", "FY28 Q1", "FY28 Q2"],
+            ["FY26 Q3", "FY26 Q4", "FY27 Q1", "FY27 Q2", "FY27 Q3", "FY27 Q4", "FY28 Q1", "FY28 Q2"],
             key="quarter_selector"
         )
         
@@ -439,10 +539,13 @@ def main():
     col_h1, col_h2 = st.columns([3, 1])
     col_h1.markdown("### 💻 Laptop Forecast App")
     # Display Quarter and Version in a clean box or line
-    col_h2.success(f"**v3.1** | {selected_quarter} | {platform.system()}")
+    col_h2.success(f"**v3.5** | {selected_quarter} | {platform.system()}")
 
     # --- CALCULATION ENGINE ---
     df_calc = st.session_state.data_df.copy()
+    
+    # Re-Calculate Effective Opening Stock (in case User changed Physical Stock)
+    df_calc["Effective Opening Stock"] = df_calc["Physical Stock (Input)"] - df_calc["Prev Q Demand"]
     
     # Verify sort
     df_calc.sort_values(by=["Region", "Model"], inplace=True)
@@ -454,10 +557,20 @@ def main():
         df_calc["Effective Tech Refresh"] + 
         df_calc["New Hires"]
     )
+    # V3.2: Target Stock Formula Update
+    # Old: Target Stock = Demand + Buffer. Need = Target - Current.
+    # New: Need = (Demand + Buffer) - Effective Opening.
+    # To keep logic similar: Target Stock Level (Ideal) = Demand + Buffer.
+    # Gap = Target - Effective Opening.
+    
     df_calc["Target Stock Level"] = df_calc["Total Demand"] + df_calc["Buffer"]
     
     def calculate_needs(row):
-        needed = row["Target Stock Level"] - row["Current Stock"]
+        # V3.2: Use Effective Opening Stock
+        start_stock = row["Effective Opening Stock"]
+        # Double negative check: If start_stock is negative (backlog), it increases need.
+        # e.g. Target 100. Start -10. Need = 100 - (-10) = 110. Correct.
+        needed = row["Target Stock Level"] - start_stock
         if needed <= 0: return 0
         return math.ceil(needed)
     
@@ -495,7 +608,7 @@ def main():
     with st.form("input_form"):
         st.markdown(f"**Data Input ({selected_quarter})**")
         edited_input_df = st.data_editor(
-            filtered_db[["Region", "Model", "Language", "Current Stock", "Backlog Tech Refresh", "Break Fix", "Tech Refresh Eligibility", "New Hires", "Buffer"]],
+            filtered_db[["Region", "Model", "Language", "Physical Stock (Input)", "Prev Q Demand", "Effective Opening Stock", "Backlog Tech Refresh", "Break Fix", "Tech Refresh Eligibility", "New Hires", "Buffer"]],
             width='stretch',
             num_rows="fixed",
             height=400, # V2.2 Fixed height for better look
@@ -503,7 +616,9 @@ def main():
                 "Model": st.column_config.TextColumn(disabled=True),
                 "Region": st.column_config.TextColumn(disabled=True),
                 "Language": st.column_config.TextColumn(disabled=True),
-                "Current Stock": st.column_config.NumberColumn(required=True),
+                "Physical Stock (Input)": st.column_config.NumberColumn(required=True, label="Physical Stock (Input)"),
+                "Prev Q Demand": st.column_config.NumberColumn(disabled=True, help="Total Demand from Previous Quarter (Read-Only)"),
+                "Effective Opening Stock": st.column_config.NumberColumn(disabled=True, help="Physical Stock - Prev Q Demand"),
                 "Backlog Tech Refresh": st.column_config.NumberColumn(min_value=0, required=True),
                 "Break Fix": st.column_config.NumberColumn(min_value=0, required=True),
                 "Tech Refresh Eligibility": st.column_config.NumberColumn(min_value=0, required=True),
@@ -513,6 +628,22 @@ def main():
             key="data_editor"
         )
         
+        # V3.5: Totals Row
+        st.markdown("**Totals (Reference)**")
+        # Columns: Current Stock (Physical), Prev Q Demand, Effective Opening, New Hires, Total Demand, Required (Needs), Cost
+        # Note: filtered_db has the calculated values (Total Demand, Needs, Cost).
+        # We sum from filtered_db to properly reflect the calculations.
+        totals_data = {
+            "Physical Stock": [int(filtered_db["Physical Stock (Input)"].sum())],
+            "Prev Q Demand": [int(filtered_db["Prev Q Demand"].sum())],
+            "Effect. Opening": [int(filtered_db["Effective Opening Stock"].sum())],
+            "New Hires": [int(filtered_db["New Hires"].sum())],
+            "Total Demand": [int(filtered_db["Total Demand"].sum())], # Demand might be float, convert for display? User asked for Integer Precision in Lookback. Demand in current Q might still be float? Filtered_db has it as float. Let's show 1 decimal or int? Prompt says "Integer Precision & Totals". Let's assume standard formatting.
+            "Purch Needs": [int(filtered_db["Purchase Needs"].sum())],
+            "Total Cost": [f"${filtered_db['Total Cost'].sum():,.0f}"]
+        }
+        st.dataframe(pd.DataFrame(totals_data), hide_index=True)
+
         if st.form_submit_button("💾 Save Changes"):
             st.session_state.data_df.update(edited_input_df)
             
@@ -575,6 +706,21 @@ def main():
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
+        **v3.5 (Integer Precision & Totals)**
+        - **Lookback**: `Prev Q Demand` is now rounded UP to the nearest integer.
+        - **UI**: Added a "Totals" reference row below the data input table.
+
+        **v3.4 (Extended Calendar)**
+        - **Timeline**: Added `FY26 Q3` to support earlier historical data entry and smoother Lookback transitions.
+
+        **v3.3 (Refined Region Mapping)**
+        - **Upload Logic**: Added specific location mapping for UK (MLN8) and LATAM (LSP3).
+        
+        **v3.2 (Rolling Forecast)**
+        - **Lookback Logic**: Auto-calculates Effective Opening Stock based on Prev Quarter.
+        - **Calculations**: `Effective Opening = Physical Stock - Prev Q Demand`.
+        - **Input**: Renamed `Current Stock` to `Physical Stock (Input)`.
+
         **v3.1 (Bulk Upload & Cross-Platform)**
         - **Feature**: Bulk Stock Upload via CSV (Sidebar).
         - **Core**: Fully compatible with Windows and macOS.
