@@ -9,9 +9,11 @@ import base64
 import platform
 import math
 
+import datetime
+
 # Page Config
 st.set_page_config(
-    page_title="Laptop Forecast App v3.5",
+    page_title="Laptop Forecast App v4.0",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -90,6 +92,7 @@ def get_previous_quarter_name(quarter_str):
     except:
         return None
 
+
 def process_stock_upload(uploaded_file):
     try:
         try:
@@ -159,7 +162,6 @@ def process_stock_upload(uploaded_file):
         return count_updated, None
     except Exception as e:
         return 0, str(e)
-
 def get_languages_for_region(region):
     """Enforce Regional Constraints."""
     if region == "UK":
@@ -413,7 +415,6 @@ def main():
         st.header("⚙️ App Settings")
         
         # V2.2: Dynamic DB Path Editor (Top Level or Expander)
-        # Using simple expander to keep sidebar tidy, but functionality is seamless
         with st.expander("📂 Database Location", expanded=True):
             current_config = load_config()
             db_val = current_config.get("database_path", "forecast_db.json")
@@ -486,7 +487,7 @@ def main():
 
         # Load Data Logic
         if 'loaded_quarter' not in st.session_state or st.session_state.loaded_quarter != selected_quarter:
-            # v2.9: Load DF, Rate, and Pricing Config
+            # v2.9: Load DF, Rate, pricing_cfg
             data, rate, pricing_cfg = load_quarter_data(selected_quarter)
             st.session_state.data_df = data
             st.session_state.tr_rate_current = rate # Sync to session
@@ -540,7 +541,7 @@ def main():
     col_h1.markdown("### 💻 Laptop Forecast App")
     # Display Quarter and Version in a clean box or line
     col_h2.success(f"**v3.5** | {selected_quarter} | {platform.system()}")
-
+    
     # --- CALCULATION ENGINE ---
     df_calc = st.session_state.data_df.copy()
     
@@ -656,92 +657,52 @@ def main():
                         # JSON Key = "{Region}_{Model}"
                         current_pricing[f"{region}_{model}"] = st.session_state[s_key]
 
-            # V2.9: Save All
+            # Save to JSON
             save_quarter_data(selected_quarter, st.session_state.data_df, tech_refresh_rate, current_pricing)
-            
-            # Update Session State to match save
-            st.session_state.tr_rate_current = tech_refresh_rate
-            st.success("Saved!")
+            st.success(f"Saved data and pricing for {selected_quarter}!")
             st.rerun()
 
-    # --- RESULTS & PO ---
     st.divider()
-    t1, t2 = st.tabs(["🔍 Detailed Results", "📑 Purchase Orders"])
+
+    # --- REPORTING SECTION ---
+    st.header("📋 Reporting")
+    col1, col2 = st.columns(2)
     
-    with t1:
-        st.dataframe(
-            filtered_db[["Region", "Model", "Language", "Total Demand", "Target Stock Level", "Purchase Needs", "Total Cost"]].style.format({
-                "Total Demand": "{:.1f}", 
-                "Target Stock Level": "{:.1f}", 
-                "Purchase Needs": "{:.0f}", 
-                "Total Cost": "${:,.0f}"
-            }),
-            width='stretch'
+    with col1:
+        st.download_button(
+            label="Download CSV Report",
+            data=filtered_db.to_csv(index=False).encode('utf-8'),
+            file_name=f'forecast_{selected_quarter}.csv',
+            mime='text/csv'
+        )
+        
+    with col2:
+        pdf_bytes = create_pdf(filtered_db, selected_quarter)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_bytes,
+            file_name=f'procurement_{selected_quarter}.pdf',
+            mime='application/pdf'
         )
 
-    with t2:
-        po_df = filtered_db[filtered_db["Purchase Needs"] > 0].copy()
-        
-        if po_df.empty:
-            st.info("No purchases required.")
-        else:
-            po_view = po_df[["Model", "Region", "Language", "Purchase Needs", "Total Cost"]].rename(
-                columns={"Purchase Needs": "Quantity", "Total Cost": "Total Line Cost"}
-            ).reset_index(drop=True)
-            
-            po_view["Unit Price"] = po_view.apply(lambda r: prices.get((r["Region"], r["Model"]), 0), axis=1)
-            po_view["Quantity"] = po_view["Quantity"].astype(int)
-            po_view = po_view[["Model", "Region", "Language", "Quantity", "Unit Price", "Total Line Cost"]]
-            
-            st.dataframe(po_view, width='stretch')
-            
-            col_d1, col_d2 = st.columns(2)
-            csv = po_view.to_csv(index=False).encode('utf-8')
-            col_d1.download_button("📥 CSV", csv, f"PO_{selected_quarter}.csv", "text/csv")
-            
-            pdf_bytes = create_pdf(po_view, selected_quarter)
-            col_d2.download_button("📄 PDF", data=pdf_bytes, file_name=f"PO_{selected_quarter}.pdf", mime='application/pdf')
-
-    # --- RELEASE NOTES ---
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
-        **v3.5 (Integer Precision & Totals)**
-        - **Lookback**: `Prev Q Demand` is now rounded UP to the nearest integer.
-        - **UI**: Added a "Totals" reference row below the data input table.
+        **v3.5 (Rollback)**
+        - **Rollback**: Reverted to Version 3.5 state. 
+        - **Removed**: Hardware Integration, New Hires Allocator, v4.0 Sidebar structure.
+        - **Restored**: Manual entry for Backlog/Eligibility.
 
-        **v3.4 (Extended Calendar)**
-        - **Timeline**: Added `FY26 Q3` to support earlier historical data entry and smoother Lookback transitions.
-
-        **v3.3 (Refined Region Mapping)**
-        - **Upload Logic**: Added specific location mapping for UK (MLN8) and LATAM (LSP3).
+        **v3.5 (Totals & Precision)**
+        - **Input Totals**: Added summary row for Physical Stock, Demand, Needs, Cost.
+        - **Precision**: 'Prev Q Demand' logic updated to round UP to nearest integer.
         
+        **v3.2.1 (Rolling Forecast Hotfix)**
+        - **Fix**: Resolved `KeyError: 'Current Stock'` by adding migration logic to rename it to `Physical Stock (Input)`.
+        - **Fix**: Added handling for missing columns in older data files.
+        - **Fix**: Ensured `Effective Opening Stock` uses `Physical Stock (Input)` correctly.
+
         **v3.2 (Rolling Forecast)**
-        - **Lookback Logic**: Auto-calculates Effective Opening Stock based on Prev Quarter.
-        - **Calculations**: `Effective Opening = Physical Stock - Prev Q Demand`.
-        - **Input**: Renamed `Current Stock` to `Physical Stock (Input)`.
-
-        **v3.1 (Bulk Upload & Cross-Platform)**
-        - **Feature**: Bulk Stock Upload via CSV (Sidebar).
-        - **Core**: Fully compatible with Windows and macOS.
-        - **Pathing**: Normalized file paths for Unix systems.
-        - **Builds**: Native installers for both platforms.
-
-        **v2.9.1 (Crital Fix)**
-        - **Fix**: Pricing sidebar fields now strictly sync with Active Quarter context.
-
-        **v2.9 (Period-Based Pricing)**
-        - **Persistence**: Regional Pricing is now saved Per-Quarter.
-        - **Context Switch**: Changing quarters updates the pricing table to that quarter's settings.
-
-        **v2.8 (Refactoring)**
-        - **Model Rename**: Renamed `Microsoft Surface 7 Laptop` to `Microsoft SL7`.
-        - **Migration**: Auto-migrates legacy data to new model name.
-
-        **v2.7 (Variable Logic)**
-        - **Persistence**: `Tech Refresh Adoption Rate` is now saved per-quarter.
-        - **UI**: Updated Slider Label.
-
         **v2.6**
         - **Data**: Added `FY26 Q4` for historical tracking.
 
