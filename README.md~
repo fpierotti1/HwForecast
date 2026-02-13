@@ -1,1 +1,221 @@
-# Antigravity
+# 💻 Laptop Forecast App
+
+> **v3.6** — A Streamlit-powered dashboard for forecasting laptop procurement needs across global regions.
+
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B?logo=streamlit&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue)
+
+---
+
+## Overview
+
+The **Laptop Forecast App** helps IT procurement teams plan and forecast laptop purchase needs per quarter. It provides a data-driven dashboard that calculates purchase requirements based on current stock, demand drivers (tech refresh, break/fix, new hires), and rolling quarter history.
+
+### Key Features
+
+- 📊 **Executive Dashboard** — Real-time KPIs for New Hires, Order Value, and Purchase Units
+- 🗓️ **Quarterly Planning** — Switch between fiscal quarters (FY26–FY28)
+- 🔄 **Rolling Forecast** — Lookback logic auto-calculates Effective Opening Stock from the previous quarter
+- 💰 **Regional Pricing** — Per-region, per-model pricing saved per quarter
+- 📂 **Bulk Stock Upload** — Import CSV stock reports to populate inventory
+- 📄 **PDF Purchase Orders** — Generate procurement-ready PDF reports
+- 📥 **CSV Export** — Download detailed forecast data
+- 🌗 **Dark Mode** — Built-in toggle for dark theme
+- 🌍 **Cross-Platform** — Runs on Windows and macOS
+
+---
+
+## Supported Dimensions
+
+| Dimension | Values |
+|-----------|--------|
+| **Models** | Apple MacBook 14", Apple MacBook 16", Microsoft SL7 |
+| **Regions** | EMEA, UK, Tel Aviv, LATAM, NAMER, APAC |
+| **Languages** | English, French, German, Hebrew, Italian, Spanish, Swedish |
+
+> Regional constraints are enforced (e.g., UK → English only, Tel Aviv → Hebrew only, EMEA → all except Hebrew).
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- **Python 3.10+** — [Download](https://www.python.org/downloads/)
+- **pip** — Included with Python
+
+### Quick Start (Windows)
+
+The fastest way to get running — just double-click:
+
+```
+setup_and_run.bat
+```
+
+This will automatically:
+1. Create a virtual environment (`venv/`)
+2. Install all dependencies
+3. Launch the Streamlit dashboard
+
+### Manual Setup
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/<your-username>/HwForecast.git
+cd HwForecast
+
+# 2. Create and activate virtual environment
+python -m venv venv
+
+# Windows
+call venv\Scripts\activate.bat
+
+# macOS / Linux
+source venv/bin/activate
+
+# 3. Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Run the application
+streamlit run app.py --global.developmentMode=false
+```
+
+The dashboard will open at `http://localhost:8501`.
+
+---
+
+## Project Structure
+
+```
+HwForecast/
+├── app.py                # Main application (Streamlit dashboard)
+├── requirements.txt      # Python dependencies
+├── settings.json         # App configuration (database path)
+├── forecast_db.json      # Data store (JSON-based, per-quarter)
+├── setup_and_run.bat     # One-click Windows launcher
+├── build_windows.bat     # PyInstaller build script (Windows .exe)
+├── build_macos.sh        # PyInstaller build script (macOS .app/.dmg)
+└── README.md             # This file
+```
+
+---
+
+## Configuration
+
+### Database Path
+
+The app reads/writes forecast data to a JSON file. By default, it uses `forecast_db.json` in the app directory.
+
+To change this (e.g., to a shared network drive):
+
+1. Edit `settings.json`:
+   ```json
+   {
+       "database_path": "\\\\server\\share\\forecast_db.json"
+   }
+   ```
+2. Or update it live via the **📂 Database Location** expander in the sidebar.
+
+---
+
+## How It Works
+
+### Forecast Formula
+
+```
+Total Demand = Backlog Tech Refresh + Break Fix + (Tech Refresh Eligibility × Adoption Rate) + New Hires
+Effective Opening Stock = Physical Stock − Previous Quarter Demand
+Target Stock Level = Total Demand + Buffer
+Purchase Needs = max(0, ⌈Target Stock Level − Effective Opening Stock⌉)
+Total Cost = Purchase Needs × Unit Price
+```
+
+### Stock Upload (CSV)
+
+Upload a CSV from your asset management system (e.g., ServiceNow). The parser maps:
+
+| CSV Column | Maps To |
+|---|---|
+| `model.short_description` | Model (MacBook 14", 16", SL7) |
+| `location` / `location.u_geographic_region` | Region |
+| `model.ref_cmdb_hardware_product_model.u_keyboard_language` | Language |
+
+**Special mapping rules:**
+- "Nordic" keyboard → mapped to "Swedish" (v3.6)
+- Location codes: MLN8 → UK, LSP3 → LATAM, LMX1/LSNX → NAMER, MTV → Tel Aviv
+
+---
+
+## Building Executables
+
+### Windows (.exe)
+
+```bash
+build_windows.bat
+```
+Output: `dist\LaptopForecast_v3.exe`
+
+### macOS (.app / .dmg)
+
+```bash
+chmod +x build_macos.sh
+./build_macos.sh
+```
+Output: `dist/LaptopForecast_v3_3.1.dmg`
+
+> **Note:** macOS builds require `create-dmg` (`brew install create-dmg`) for DMG packaging.
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `streamlit` | Web dashboard framework |
+| `pandas` | Data manipulation |
+| `fpdf` | PDF report generation |
+| `pyinstaller` | Executable packaging (build only) |
+
+---
+
+## Version History
+
+| Version | Highlights |
+|---------|-----------|
+| **v3.6** | Nordic → Swedish language mapping in Stock Upload |
+| **v3.5.9** | Streamlit deprecation fixes |
+| **v3.5.7** | Dashboard alignment with PO layout |
+| **v3.5** | Totals & precision (ceil rounding) |
+| **v3.2** | Rolling Forecast with lookback logic |
+| **v3.1** | Bulk CSV upload, cross-platform support |
+| **v2.9** | Per-quarter pricing persistence |
+| **v2.8** | Model rename (Surface 7 → SL7) + data migration |
+
+Full version history is available inside the app under **📜 Version History**.
+
+---
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `python` not recognized | Install Python 3.10+ and ensure it's added to PATH |
+| `pyinstaller` not found | Run `pip install pyinstaller` |
+| macOS "Unidentified Developer" | System Settings → Privacy & Security → Open Anyway |
+| CSV upload fails | Ensure the CSV contains `model.short_description` column |
+| Data not saving | Check `settings.json` database path is writable |
+
+---
+
+## Author
+
+**Fabio Pierotti**
+
+---
+
+## License
+
+This project is provided as-is for internal use. See [LICENSE](LICENSE) for details.
