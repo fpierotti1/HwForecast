@@ -13,7 +13,7 @@ import datetime
 
 # Page Config
 st.set_page_config(
-    page_title="Laptop Forecast App v3.5.9",
+    page_title="Laptop Forecast App v3.6",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -136,6 +136,7 @@ def process_stock_upload(uploaded_file):
         # 4. Map Languages
         def map_language(lang):
             l = str(lang).title()
+            if "Nordic" in l: return "Swedish"  # V3.6: Nordic -> Swedish
             if "English" in l: return "English"
             return l
 
@@ -550,7 +551,7 @@ def main():
     col_h1, col_h2 = st.columns([3, 1])
     col_h1.markdown("### 💻 Laptop Forecast App")
     # Display Quarter and Version in a clean box or line
-    col_h2.success(f"**v3.5.9** | {selected_quarter} | {platform.system()}")
+    col_h2.success(f"**v3.6** | {selected_quarter} | {platform.system()}")
     
     # --- CALCULATION ENGINE ---
     df_calc = st.session_state.data_df.copy()
@@ -724,6 +725,9 @@ def main():
     st.divider()
     with st.expander("📜 Version History"):
         st.markdown("""
+        **v3.6 (Nordic Mapping)**
+        - **Data**: Added logic to map 'Nordic' keyboard layouts to 'Swedish' in Stock Upload Parser.
+
         **v3.5.9 (Deprecation Fixes)**
         - **Core**: Updated Streamlit parameters to silence deprecation warnings.
         - **Refactor**: Replaced `use_container_width` with `width="stretch"`.
